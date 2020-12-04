@@ -63,6 +63,12 @@ PipelineCache::~PipelineCache()
 }
 
 // =====================================================================================================================
+Vkgc::ICache* PipelineCache::GetCacheAdapter() const
+{
+    return m_pBinaryCache->GetCacheAdapter();
+}
+
+// =====================================================================================================================
 VkResult PipelineCache::Create(
     Device*                          pDevice,
     const VkPipelineCacheCreateInfo* pCreateInfo,

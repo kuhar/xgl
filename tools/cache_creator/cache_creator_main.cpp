@@ -22,6 +22,7 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
+
 #include "cache_creator.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileOutputBuffer.h"
@@ -63,6 +64,7 @@ llvm::raw_ostream &infos() {
 
 namespace fs = llvm::sys::fs;
 
+<<<<<<< HEAD
 static llvm::Error getFileSizes(llvm::ArrayRef<std::string> filenames, llvm::MutableArrayRef<size_t> outFileSizes) {
   assert(filenames.size() == outFileSizes.size());
   for (auto &&nameSizePair : llvm::zip(filenames, outFileSizes)) {
@@ -73,6 +75,8 @@ static llvm::Error getFileSizes(llvm::ArrayRef<std::string> filenames, llvm::Mut
   return llvm::Error::success();
 }
 
+=======
+>>>>>>> Simplicy cache-creator. Refactor cache hash reading and UUID manipulation.
 int main(int argc, char **argv) {
   llvm::cl::ParseCommandLineOptions(argc, argv);
 
@@ -101,6 +105,7 @@ int main(int argc, char **argv) {
     llvm::consumeError(std::move(err));
     return 4;
   }
+<<<<<<< HEAD
 
   // TODO(kuhar): Initialize the platform key properly by providing the `fingerprint` parameter instead of an empty
   // array. This is so that the cache can pass validation and be consumed by the ICD. Note that this also requires
@@ -119,6 +124,46 @@ int main(int argc, char **argv) {
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> inputBufferOrErr = llvm::MemoryBuffer::getFile(filename);
     if (std::error_code err = inputBufferOrErr.getError()) {
       llvm::errs() << "Failed to read input file " << filename << ": " << err.message() << "\n";
+=======
+  std::unique_ptr<llvm::FileOutputBuffer> outFileBuffer(std::move(*outFileBufferOrErr));
+
+  size_t vkHeaderBytes = 0;
+  auto writeHeaderRes =
+      vk::WriteVkPipelineCacheHeaderData(outFileBuffer->getBufferStart(), cacheBlobSize, cc::AMDVendorId, DeviceId,
+                                         uuid.data(), uuid.size(), &vkHeaderBytes);
+  (void)writeHeaderRes;
+  assert(writeHeaderRes == Util::Result::Success);
+  assert(vkHeaderBytes == vk::VkPipelineCacheHeaderDataSize);
+
+  vk::PipelineBinaryCacheSerializer serializer;
+  Util::Result serializerInitRes =
+      serializer.Initialize(cacheBlobSize - vkHeaderBytes, outFileBuffer->getBufferStart() + vkHeaderBytes);
+  (void)serializerInitRes;
+  assert(serializerInitRes == Util::Result::Success);
+
+  size_t i = 0;
+  for (const auto &fileNameSizePair : llvm::zip(InFiles, fileSizes)) {
+    const auto &fileName = std::get<0>(fileNameSizePair);
+    const size_t &fileSize = std::get<1>(fileNameSizePair);
+
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> inputBufferOrErr = llvm::MemoryBuffer::getFile(fileName);
+    if (std::error_code err = inputBufferOrErr.getError()) {
+      llvm::errs() << "Failed to read input file " << fileName << ": " << err.message() << "\n";
+      return 3;
+    }
+    llvm::errs() << "Read: " << fileName << "\n";
+
+    std::unique_ptr<llvm::MemoryBuffer> inputBuffer(std::move(*inputBufferOrErr));
+    assert(fileSize == inputBuffer->getBufferSize());
+
+    vk::BinaryCacheEntry entry = {};
+    entry.dataSize = fileSize;
+
+    auto hashCodeOrErr = cc::getElfCacheHash(*inputBuffer);
+    if (auto err = hashCodeOrErr.takeError()) {
+      llvm::errs() << "Failed to process " << fileName << ". Error:\t" << err << "\n";
+      llvm::consumeError(std::move(err));
+>>>>>>> Simplicy cache-creator. Refactor cache hash reading and UUID manipulation.
       return 3;
     }
     infos() << "Read: " << filename << "\n";

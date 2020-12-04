@@ -35,6 +35,7 @@ namespace vk
 {
 
 class Device;
+class PipelineBinaryCache;
 
 // Layout for pipeline cache private header, all fields are written with LSB first.
 struct PipelineCachePrivateHeaderData
@@ -69,7 +70,7 @@ public:
     VkResult Merge(uint32_t srcCacheCount, const PipelineCache** ppSrcCaches);
 
     VK_INLINE PipelineBinaryCache* GetPipelineCache() const { return m_pBinaryCache; }
-    Vkgc::ICache* GetCacheAdapter() const { return m_pBinaryCache->GetCacheAdapter(); }
+    Vkgc::ICache* GetCacheAdapter() const;
 
 protected:
     PipelineCache(const Device*  pDevice,
