@@ -84,3 +84,12 @@ target_sources(cache-creator-tests PRIVATE
 )
 target_include_directories(cache-creator-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(cache-creator-tests PRIVATE cache_creator_lib)
+
+option(CC_BUILD_MK_EMPTY_CACHE "Build the mk-empty-cache tool? This requires Vulkan." OFF)
+if (CC_BUILD_MK_EMPTY_CACHE)
+    add_executable(mk-empty-cache)
+    target_sources(mk-empty-cache PRIVATE mk_empty_cache.cpp)
+    find_package(Vulkan REQUIRED)
+    target_link_libraries(mk-empty-cache PRIVATE ${Vulkan_LIBRARIES})
+    target_include_directories(mk-empty-cache PRIVATE ${Vulkan_INCLUDE_DIR})
+endif()

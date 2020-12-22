@@ -22,7 +22,6 @@
  *  SOFTWARE.
  *
  **********************************************************************************************************************/
-
 #include "cache_creator.h"
 #include "palPlatformKey.h"
 #include "llvm/ADT/STLExtras.h"

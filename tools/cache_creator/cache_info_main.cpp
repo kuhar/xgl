@@ -24,15 +24,13 @@
  **********************************************************************************************************************/
 
 #include "cache_creator.h"
-#include "palInlineFuncs.h"
 #include "include/binary_cache_serialization.h"
 
-#if defined(Status)
 #undef Status
-#endif
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/BinaryStreamReader.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
@@ -80,27 +78,27 @@ int main(int argc, char **argv) {
   llvm::cl::ParseCommandLineOptions(argc, argv);
 
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> inputBufferOrErr = llvm::MemoryBuffer::getFile(InFile);
-  if (std::error_code err = inputBufferOrErr.getError()) {
+  if (auto err = inputBufferOrErr.getError()) {
     llvm::errs() << "Failed to read input file " << InFile << ": " << err.message() << "\n";
     return 3;
   }
-  std::unique_ptr<llvm::MemoryBuffer> inputBuffer(std::move(*inputBufferOrErr));
-  llvm::outs() << "Read: " << InFile << ", " << inputBuffer->getBufferSize() << " B\n";
+  llvm::BinaryStreamReader inputReader((*inputBufferOrErr)->getBuffer(), llvm::support::endianness::little);
+  const size_t inputBlobSize = inputReader.getLength();
+  llvm::outs() << "Read: " << InFile << ", " << inputBlobSize << " B\n";
 
   constexpr size_t pipelineBinaryCacheHeaderSize = sizeof(vk::PipelineBinaryCachePrivateHeader);
-  constexpr size_t minCacheBlobSize = vk::VkPipelineCacheHeaderDataSize + pipelineBinaryCacheHeaderSize;
+  constexpr size_t minCacheBlobSize = vk::VkPipelineCacheHeaderDataSize + sizeof(vk::PipelineBinaryCachePrivateHeader);
 
-  const size_t inputBlobSize = inputBuffer->getBufferSize();
   if (inputBlobSize < minCacheBlobSize) {
     llvm::errs() << "Input file too small to be a valid cache blob: " << inputBlobSize << "B < " << minCacheBlobSize
                  << "B\n";
     return 3;
   }
 
-  auto *inputBufferBegin = reinterpret_cast<const uint8_t *>(inputBuffer->getBufferStart());
-  const uint8_t *currDataPos = inputBufferBegin;
-  auto *vkCacheHeader = reinterpret_cast<const vk::PipelineCacheHeaderData *>(currDataPos);
-  currDataPos += vk::VkPipelineCacheHeaderDataSize;
+  const vk::PipelineCacheHeaderData *vkCacheHeader = nullptr;
+  llvm::cantFail(inputReader.readObject(vkCacheHeader));
+
+
 
   llvm::outs() << "\n=== Vulkan Pipeline Cache Header ===\n"
                << "header length:\t\t" << vkCacheHeader->headerLength << "\n"
@@ -109,21 +107,28 @@ int main(int argc, char **argv) {
                << "device ID:\t\t" << llvm::format("0x%" PRIx32, vkCacheHeader->deviceID) << "\n"
                << "pipeline cache UUID:\t" << cc::uuidToHexString(vkCacheHeader->UUID) << "\n";
 
+  const int64_t trailingSpace = int64_t(vkCacheHeader->headerLength) - vk::VkPipelineCacheHeaderDataSize;
+  llvm::outs() << "trailing space:\t\t" << trailingSpace << "\n";
+  if (trailingSpace < 0) {
+    llvm::errs() << "Header length is less then Vulkan header size. Existing cache blob analysis.\n";
+    return 4;
+  }
+
   if (vkCacheHeader->vendorID != cc::AMDVendorId) {
     llvm::errs() << "Vendor ID doesn't match the AMD vendor ID (0x1002). Exiting cache blob analysis.\n";
     return 4;
   }
 
-  auto *pipelineBinaryCacheHeader = reinterpret_cast<const vk::PipelineBinaryCachePrivateHeader *>(currDataPos);
-  currDataPos += pipelineBinaryCacheHeaderSize;
+  llvm::cantFail(inputReader.skip(static_cast<uint32_t>(trailingSpace)));
+
+  const vk::PipelineBinaryCachePrivateHeader *pipelineBinaryCacheHeader = nullptr;
+  llvm::cantFail(inputReader.readObject(pipelineBinaryCacheHeader));
 
   llvm::outs() << "\n=== Pipeline Binary Cache Private Header ===\n"
                << "header length:\t" << pipelineBinaryCacheHeaderSize << "\n"
                << "hash ID:\t"
                << llvm::format_bytes(pipelineBinaryCacheHeader->hashId, llvm::None, pipelineBinaryCacheHeaderSize)
-               << "\n";
-
-  llvm::outs() << "\n=== Cache Blob Info ===\n"
+               << "\n\n=== Cache Blob Info ===\n"
                << "content size:\t" << (inputBlobSize - minCacheBlobSize) << "\n";
 
   llvm::StringMap<std::string> elfMD5ToSourcePath;
@@ -133,7 +138,7 @@ int main(int argc, char **argv) {
       llvm::errs() << "elf-source-dir " << ElfSourceDir << "could not be expanded: " << err.message() << "\n";
       return 4;
     }
-    llvm::StringRef elfSourceDirReal(rawElfSourceDir.begin(), rawElfSourceDir.size());
+    llvm::StringRef elfSourceDirReal(rawElfSourceDir.data(), rawElfSourceDir.size());
 
     if (!fs::is_directory(elfSourceDirReal)) {
       llvm::errs() << elfSourceDirReal << " is not a directory!\n";
@@ -142,27 +147,25 @@ int main(int argc, char **argv) {
     elfMD5ToSourcePath = collectSourceElfMD5Sums(elfSourceDirReal);
   }
 
-  auto *inputBufferEnd = reinterpret_cast<const uint8_t *>(inputBuffer->getBufferEnd());
   size_t cacheEntryIdx = 0;
-  for (; currDataPos < inputBufferEnd; ++cacheEntryIdx) {
-    auto *entryHeader = reinterpret_cast<const vk::BinaryCacheEntry *>(currDataPos);
-    currDataPos += sizeof(vk::BinaryCacheEntry);
+  for (; inputReader.bytesRemaining() != 0; ++cacheEntryIdx) {
+    const vk::BinaryCacheEntry *entryHeader = nullptr;
+    if (auto err = inputReader.readObject(entryHeader)) {
+      llvm::errs() << "Failed to read binary cache entry #" << cacheEntryIdx << ". Error:\t" << err << "\n";
+      llvm::consumeError(std::move(err));
+      return 4;
+    }
 
     llvm::outs() << "\n\t*** Entry " << cacheEntryIdx << " ***\n"
                  << "\thash ID:\t" << llvm::format_bytes(entryHeader->hashId.bytes) << "\n"
                  << "\tdata size:\t" << entryHeader->dataSize << "\n";
 
-    const size_t remainingBlobBytes = inputBufferEnd - currDataPos;
-    if (entryHeader->dataSize > remainingBlobBytes) {
-      llvm::errs() << "[WARN] Entry data size exceeds cache blob content size!\n";
+    llvm::ArrayRef<uint8_t> data;
+    if (auto err = inputReader.readBytes(data, entryHeader->dataSize)) {
+      llvm::errs() << "Failed to read cache entry #" << cacheEntryIdx << ". Error:\t" << err << "\n";
+      llvm::consumeError(std::move(err));
       return 4;
     }
-
-    llvm::ArrayRef<uint8_t> data(reinterpret_cast<const uint8_t *>(currDataPos), entryHeader->dataSize);
-    if (data.end() > inputBufferEnd)
-      break;
-
-    currDataPos += entryHeader->dataSize;
 
     llvm::MD5 md5;
     md5.update(data);
@@ -182,6 +185,5 @@ int main(int argc, char **argv) {
   }
 
   llvm::outs() << "\nTotal num entries:\t" << cacheEntryIdx << "\n";
-
   return 0;
 }
