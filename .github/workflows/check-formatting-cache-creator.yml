@@ -2,6 +2,7 @@ name: Cache Creator code formatting
 
 on:
   pull_request:
+  push:
 
 jobs:
   clang-format-check:
