@@ -110,9 +110,12 @@ VkResult PipelineCache::Create(
                     const void* pData   = Util::VoidPtrInc(pCreateInfo->pInitialData, sizeof(PipelineCacheHeaderData));
                     size_t dataSize     = pCreateInfo->initialDataSize - sizeof(PipelineCacheHeaderData);
                     vk::PhysicalDevice* pPhysicalDevice = pDevice->VkPhysicalDevice(DefaultDeviceIndex);
+                    auto blobFormat = settings.enablePortablePipelineCacheFormat ?
+                                        PipelineCacheBlobFormat::Portable : PipelineCacheBlobFormat::Strict;
 
                     if (PipelineBinaryCache::IsValidBlob(pPhysicalDevice->VkInstance()->GetAllocCallbacks(),
                                                          pPhysicalDevice->GetPlatformKey(),
+                                                         blobFormat,
                                                          dataSize,
                                                          pData))
                     {
@@ -264,11 +267,14 @@ VkResult PipelineCache::GetData(
 {
     VK_ASSERT(pSize != nullptr);
 
-    VkResult        result = VK_SUCCESS;
+    VkResult                      result     = VK_SUCCESS;
 
     if (m_pBinaryCache != nullptr)
     {
-        result = m_pBinaryCache->Serialize(pData, pSize);
+        const RuntimeSettings&        settings   = m_pDevice->GetRuntimeSettings();
+        auto blobFormat = settings.enablePortablePipelineCacheFormat ?
+                            PipelineCacheBlobFormat::Portable : PipelineCacheBlobFormat::Strict;
+        result = m_pBinaryCache->Serialize(pData, pSize, blobFormat);
     }
     else
     {

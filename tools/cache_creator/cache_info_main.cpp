@@ -52,7 +52,7 @@ llvm::cl::opt<std::string> ElfSourceDir("elf-source-dir", llvm::cl::desc("Direct
 
 namespace fs = llvm::sys::fs;
 
-llvm::StringMap<std::string> collectSourceElfMD5Sums(llvm::Twine dir) {
+static llvm::StringMap<std::string> collectSourceElfMD5Sums(llvm::Twine dir) {
   llvm::StringMap<std::string> md5ToElfPath;
 
   std::error_code ec{};
@@ -72,6 +72,14 @@ llvm::StringMap<std::string> collectSourceElfMD5Sums(llvm::Twine dir) {
   }
 
   return md5ToElfPath;
+}
+
+static llvm::StringRef pipelineCacheBlobFormatToStr(vk::PipelineCacheBlobFormat format) {
+  switch (format) {
+    case vk::PipelineCacheBlobFormat::Strict: return "Strict";
+    case vk::PipelineCacheBlobFormat::Portable: return "Portable";
+    default: return "Unknown format";
+  }
 }
 
 int main(int argc, char **argv) {
@@ -98,8 +106,6 @@ int main(int argc, char **argv) {
   const vk::PipelineCacheHeaderData *vkCacheHeader = nullptr;
   llvm::cantFail(inputReader.readObject(vkCacheHeader));
 
-
-
   llvm::outs() << "\n=== Vulkan Pipeline Cache Header ===\n"
                << "header length:\t\t" << vkCacheHeader->headerLength << "\n"
                << "header version:\t\t" << vkCacheHeader->headerVersion << "\n"
@@ -110,7 +116,7 @@ int main(int argc, char **argv) {
   const int64_t trailingSpace = int64_t(vkCacheHeader->headerLength) - vk::VkPipelineCacheHeaderDataSize;
   llvm::outs() << "trailing space:\t\t" << trailingSpace << "\n";
   if (trailingSpace < 0) {
-    llvm::errs() << "Header length is less then Vulkan header size. Existing cache blob analysis.\n";
+    llvm::errs() << "Header length is less then Vulkan header size. Exiting cache blob analysis.\n";
     return 4;
   }
 
@@ -123,13 +129,24 @@ int main(int argc, char **argv) {
 
   const vk::PipelineBinaryCachePrivateHeader *pipelineBinaryCacheHeader = nullptr;
   llvm::cantFail(inputReader.readObject(pipelineBinaryCacheHeader));
+  const vk::PipelineCacheBlobFormat blobFormat = pipelineBinaryCacheHeader->blobFormat;
 
   llvm::outs() << "\n=== Pipeline Binary Cache Private Header ===\n"
                << "header length:\t" << pipelineBinaryCacheHeaderSize << "\n"
+               << "blob format:\t" << static_cast<uint32_t>(blobFormat) << " ("
+               << pipelineCacheBlobFormatToStr(blobFormat) << ")\n"
                << "hash ID:\t"
                << llvm::format_bytes(pipelineBinaryCacheHeader->hashId, llvm::None, pipelineBinaryCacheHeaderSize)
-               << "\n\n=== Cache Blob Info ===\n"
-               << "content size:\t" << (inputBlobSize - minCacheBlobSize) << "\n";
+               << "\n";
+
+  if (blobFormat != vk::PipelineCacheBlobFormat::Strict && blobFormat != vk::PipelineCacheBlobFormat::Portable) {
+    llvm::errs() << "Unknown pipeline cache blob format. Exiting cache blob analysis.\n";
+    return 4;
+  }
+
+  llvm::outs() << "\n=== Cache Blob Info ===\n"
+               << "content size:\t" << (inputBlobSize - vkCacheHeader->headerLength - pipelineBinaryCacheHeaderSize)
+               << "\n";
 
   llvm::StringMap<std::string> elfMD5ToSourcePath;
   if (!ElfSourceDir.empty()) {
